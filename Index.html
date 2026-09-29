@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html><head><base target="_top"><meta charset="utf-8">
+<style>
+:root{--navy:#1f3864;--bg:#f4f6fb}
+*{box-sizing:border-box;font-family:Arial,sans-serif}
+body{margin:0;background:var(--bg);color:#222}
+header{background:var(--navy);color:#fff;padding:14px 20px;font-size:18px;font-weight:bold;display:flex;justify-content:space-between}
+header span{font-size:13px;font-weight:normal}
+nav{display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap}
+nav button{border:0;padding:9px 14px;border-radius:20px;background:#fff;cursor:pointer;font-size:13px;box-shadow:0 1px 3px #0002}
+nav button.on{background:var(--navy);color:#fff}
+main{padding:0 16px 30px;max-width:1100px;margin:auto}
+.card{background:#fff;border-radius:12px;padding:18px;box-shadow:0 2px 8px #0001;margin-bottom:14px}
+.login{max-width:340px;margin:60px auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+label{font-size:12px;color:#555;display:block;margin-bottom:3px}
+input,select{width:100%;padding:9px;border:1px solid #ccd;border-radius:8px;font-size:14px}
+input[type=checkbox]{width:auto}.ck label{display:inline-block;margin-right:14px;font-size:13px;color:#222}
+.go{margin-top:14px;padding:10px 22px;background:var(--navy);color:#fff;border:0;border-radius:8px;font-size:14px;cursor:pointer}
+.link{background:none;border:0;color:var(--navy);text-decoration:underline;cursor:pointer;font-size:12px;margin-top:10px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border-radius:12px;padding:14px;box-shadow:0 2px 8px #0001}.kpi b{font-size:26px;display:block}
+table{width:100%;border-collapse:collapse;font-size:13px}th{background:var(--navy);color:#fff;padding:8px;text-align:left;position:sticky;top:0}
+td{padding:7px 8px;border-bottom:1px solid #eee;vertical-align:top}.tw{max-height:520px;overflow:auto}
+.s{padding:2px 8px;border-radius:10px;font-size:11px}.OK{background:#c6e0b4}.LOW{background:#ffe699}.OUT{background:#f8cbad}.NEG{background:#f4b6b6}
+#msg{position:fixed;bottom:16px;right:16px;padding:12px 18px;border-radius:8px;color:#fff;display:none;max-width:340px}
+.hide{display:none}
+</style></head><body>
+<header>📦 Stock Management <span id="who"></span></header>
+<div id="lg" class="card login"><h3>Log in</h3>
+ <label>Profile name</label><input id="lu"><br><br><label>Password</label><input id="lp" type="password" onkeydown="if(event.key=='Enter')doLogin()">
+ <button class="go" onclick="doLogin()">Log in</button><br><button class="link" onclick="forgot()">Forgot password?</button></div>
+<div id="app" class="hide"><nav id="nav"></nav><main id="main"></main></div>
+<div id="msg"></div><datalist id="skus"></datalist>
+<script>
+let T='',ME={},DATA=[],LISTS={};
+const today=new Date().toISOString().slice(0,10);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id);
+const run=(fn,...a)=>new Promise((ok,no)=>google.script.run.withSuccessHandler(ok).withFailureHandler(no)[fn](...a));
+function msg(t,ok=true){const m=$('msg');m.textContent=t;m.style.background=ok?'#2e7d32':'#c62828';m.style.display='block';setTimeout(()=>m.style.display='none',4500)}
+function fail(e){const t=e.message||String(e);msg(t,false);if(/Session expired/.test(t))logout()}
+const F=(id,l,t='text')=>`<div><label>${l}</label><input id="${id}" type="${t}"></div>`;
+const SKU=id=>`<div><label>SKU</label><input id="${id}" list="skus" placeholder="type to search"></div>`;
+const forms={
+ in:['Stock In','addStockIn',[F('date','Date','date'),SKU('sku'),F('qty','Quantity','number'),F('doc','Doc No (PI / GRN)'),F('party','Supplier'),F('rate','Rate','number'),F('remarks','Remarks')]],
+ out:['Stock Out','addStockOut',[F('date','Date','date'),SKU('sku'),F('qty','Quantity','number'),F('doc','Doc No (CI / Challan)'),F('party','Customer / Reason'),'<div><label>Type</label><select id="type"></select></div>',F('remarks','Remarks')]],
+ open:['Opening Count','addOpening',[F('date','Count date','date'),SKU('sku'),F('qty','Qty counted','number'),F('by','Counted by'),F('remarks','Remarks')]],
+ adj:['Adjustment','addAdjustment',[F('date','Date','date'),SKU('sku'),F('qty','Qty change (+ / -)','number'),F('doc','Adj No'),F('reason','Reason')]],
+ prod:['New Product','addProduct',[F('sku','New SKU (Variant Code)'),F('itemCode','Item Code'),'<div><label>Category</label><select id="cat"></select></div>',F('name','Item name'),F('specs','Specs'),F('desc','Description / size'),F('hsn','HSN'),'<div><label>Unit</label><select id="unit"></select></div>',F('moq','MOQ','number'),F('loc','Location'),F('min','Min stock','number')]]
+};
+const PN={view:'View stock',in:'Stock In',out:'Stock Out',open:'Opening count',adj:'Adjustments',prod:'Add products'};
+function doLogin(){run('login',$('lu').value,$('lp').value).then(r=>{T=r.token;ME=r;$('lp').value='';$('lg').classList.add('hide');$('app').classList.remove('hide');$('who').innerHTML=esc(r.user)+' ('+esc(r.role)+') <button class="link" style="color:#fff" onclick="logout()">Log out</button>';start()}).catch(fail)}
+function forgot(){const n=$('lu').value.trim();if(!n)return msg('Type your profile name first.',false);run('forgotPassword',n).then(msg).catch(fail)}
+function logout(){T='';$('app').classList.add('hide');$('lg').classList.remove('hide');$('who').textContent=''}
+function start(){
+  const tabs=[];
+  if(ME.must){tabs.push(['acct','Change password']);}
+  else{if(ME.perms.includes('view'))tabs.push(['dash','Dashboard']);
+   ['in','out','open','adj','prod'].forEach(k=>{if(ME.perms.includes(k))tabs.push([k,forms[k][0]])});
+   if(ME.role==='Admin')tabs.push(['users','Profiles'],['log','Audit log']);tabs.push(['acct','My account'])}
+  $('nav').innerHTML='';tabs.forEach(([k,t])=>{const b=document.createElement('button');b.textContent=t;b.id='b'+k;b.onclick=()=>show(k);$('nav').appendChild(b)});
+  if(!ME.must){run('getLists',T).then(l=>{LISTS=l}).catch(fail);if(ME.perms.includes('view'))load()}
+  show(tabs[0][0]);
+  if(ME.must)msg('Please set your own password to continue.')}
+function show(k){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.id==='b'+k));const m=$('main');
+ if(forms[k]){const [t,fn,f]=forms[k];m.innerHTML=`<div class="card"><h3>${t}</h3><div class="grid">${f.join('')}</div><button class="go" onclick="save('${k}')">Save</button></div>`;
+  const o=a=>(a||[]).map(x=>`<option>${esc(x)}</option>`).join('');['type','cat','unit'].forEach(id=>{if($(id))$(id).innerHTML=o(id==='type'?LISTS.outTypes:id==='cat'?LISTS.categories:LISTS.units)});
+  if($('date'))$('date').value=today}
+ else if(k==='dash'){m.innerHTML=`<div class="kpis" id="kpis"></div><div class="card"><input id="q" placeholder="Search SKU, item or size..." oninput="draw()"><div style="margin-top:10px;max-width:220px"><label>Status</label><select id="f" onchange="draw()"><option value="">All</option><option>OK</option><option>LOW</option><option>OUT OF STOCK</option><option>NEGATIVE</option></select></div></div><div class="card tw"><table><thead><tr><th>SKU</th><th>Item</th><th>Size</th><th>Unit</th><th>Opening</th><th>In</th><th>Out</th><th>Adj</th><th>Current</th><th>Status</th></tr></thead><tbody id="tb"></tbody></table></div>`;load()}
+ else if(k==='acct'){m.innerHTML=`<div class="card" style="max-width:380px"><h3>Change password</h3><label>Current password</label><input id="op" type="password"><br><br><label>New password (min 8 characters)</label><input id="np" type="password"><button class="go" onclick="chg()">Change</button></div>`}
+ else if(k==='users')users();
+ else if(k==='log')logView()}
+function chg(){run('changePassword',T,$('op').value,$('np').value).then(r=>{msg(r);if(ME.must){ME.must=false;start()}$('op').value=$('np').value=''}).catch(fail)}
+function save(k){const [t,fn]=forms[k],o={};document.querySelectorAll('#main input,#main select').forEach(i=>o[i.id]=i.value);
+ run(fn,T,o).then(r=>{msg(r);document.querySelectorAll('#main input:not([type=date])').forEach(i=>i.value='')}).catch(fail)}
+function draw(){const q=($('q')||{value:''}).value.toLowerCase(),s=($('f')||{value:''}).value,tb=$('tb');if(!tb)return;
+ const cls=x=>x==='OK'?'OK':x==='LOW'?'LOW':x==='NEGATIVE'?'NEG':'OUT';
+ tb.innerHTML=DATA.filter(r=>(!s||r.status===s)&&(r.sku+r.name+r.desc).toLowerCase().includes(q)).slice(0,400)
+ .map(r=>`<tr><td>${esc(r.sku)}</td><td>${esc(r.name)}</td><td>${esc(r.desc)}</td><td>${esc(r.unit)}</td><td>${r.open}</td><td>${r.inn}</td><td>${r.out}</td><td>${r.adj}</td><td><b>${r.cur}</b></td><td><span class="s ${cls(r.status)}">${esc(r.status)}</span></td></tr>`).join('')}
+function load(){run('getSummary',T).then(d=>{DATA=d;const c=s=>d.filter(r=>r.status===s).length;
+ if($('kpis'))$('kpis').innerHTML=[['SKUs',d.length],['OK',c('OK')],['Low',c('LOW')],['Out of stock',c('OUT OF STOCK')],['Negative',c('NEGATIVE')]].map(([a,b])=>`<div class="kpi"><b>${b}</b>${a}</div>`).join('');
+ $('skus').innerHTML=d.map(r=>`<option value="${esc(r.sku)}">${esc(r.name+' '+r.desc)}</option>`).join('');draw()}).catch(fail)}
+function users(){run('listUsers',T).then(u=>{$('main').innerHTML=`<div class="card"><h3>Profiles</h3><div class="tw"><table><thead><tr><th>Profile</th><th>Role</th><th>Access</th><th></th></tr></thead><tbody>`+
+ u.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.role)}</td><td>${x.role==='Admin'?'Everything':esc(x.perms.split(',').filter(String).map(p=>PN[p]).join(', '))||'None'}</td><td><button class="link" onclick="edit('${esc(x.name)}','${esc(x.role)}','${esc(x.perms)}')">Edit</button> <button class="link" onclick="rm('${esc(x.name)}')">Remove</button></td></tr>`).join('')+
+ `</tbody></table></div></div><div class="card"><h3>Add profile / change access</h3><div class="grid">${F('un','Profile name')}<div><label>Role</label><select id="ro"><option>Staff</option><option>Admin</option></select></div></div><div class="ck" style="margin-top:12px">`+
+ Object.keys(PN).map(p=>`<label><input type="checkbox" class="pc" value="${p}"> ${PN[p]}</label>`).join('')+
+ `</div><p style="font-size:12px;color:#555">A new profile's temporary password is emailed to export@srineelkanth.com. Typing an existing name updates its access. Admin role has all access plus profile and log management.</p><button class="go" onclick="sv()">Save profile</button></div>`}).catch(fail)}
+function edit(n,r,p){$('un').value=n;$('ro').value=r;document.querySelectorAll('.pc').forEach(c=>c.checked=p.split(',').includes(c.value));window.scrollTo(0,document.body.scrollHeight)}
+function sv(){run('saveUser',T,{name:$('un').value,role:$('ro').value,perms:[...document.querySelectorAll('.pc:checked')].map(c=>c.value)}).then(r=>{msg(r);users()}).catch(fail)}
+function rm(n){if(confirm('Remove profile '+n+'?'))run('removeUser',T,n).then(r=>{msg(r);users()}).catch(fail)}
+function logView(){run('getAuditLog',T).then(r=>{$('main').innerHTML=`<div class="card tw"><h3>Audit log (latest 500)</h3><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Sheet</th><th>Key</th><th>Details</th></tr></thead><tbody>`+
+ r.map(x=>'<tr>'+x.map(c=>`<td>${esc(c)}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>'}).catch(fail)}
+</script></body></html>
